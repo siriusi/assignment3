@@ -49,7 +49,7 @@ class CaptioningRNN(object):
         self._end = word_to_idx.get('<END>', None)
 
         # Initialize word vectors
-        self.params['W_embed'] = np.random.randn(vocab_size, wordvec_dim)
+        self.params['W_embed'] = np.random.randn(vocab_size, wordvec_dim)   #V,W
         self.params['W_embed'] /= 100
 
         # Initialize CNN -> hidden state projection parameters
@@ -59,14 +59,14 @@ class CaptioningRNN(object):
 
         # Initialize parameters for the RNN
         dim_mul = {'lstm': 4, 'rnn': 1}[cell_type]
-        self.params['Wx'] = np.random.randn(wordvec_dim, dim_mul * hidden_dim)
+        self.params['Wx'] = np.random.randn(wordvec_dim, dim_mul * hidden_dim)   # W H
         self.params['Wx'] /= np.sqrt(wordvec_dim)
-        self.params['Wh'] = np.random.randn(hidden_dim, dim_mul * hidden_dim)
+        self.params['Wh'] = np.random.randn(hidden_dim, dim_mul * hidden_dim)    #H H
         self.params['Wh'] /= np.sqrt(hidden_dim)
         self.params['b'] = np.zeros(dim_mul * hidden_dim)
 
         # Initialize output to vocab weights
-        self.params['W_vocab'] = np.random.randn(hidden_dim, vocab_size)
+        self.params['W_vocab'] = np.random.randn(hidden_dim, vocab_size)     #H, V
         self.params['W_vocab'] /= np.sqrt(hidden_dim)
         self.params['b_vocab'] = np.zeros(vocab_size)
 
@@ -137,7 +137,26 @@ class CaptioningRNN(object):
         # defined above to store loss and gradients; grads[k] should give the      #
         # gradients for self.params[k].                                            #
         ############################################################################
-        pass
+        h0 = np.dot(features, W_proj) + b_proj  #相当于h0   [N, H] = {N, D] * [D, H]
+        
+        x,cache_x = word_embedding_forward(captions_in, W_embed)  #x: N, T, W
+        
+        h,cache_h = rnn_forward(x, h0, Wx, Wh, b)
+ 
+        scores, cache_scores = temporal_affine_forward(h, W_vocab, b_vocab) #(N, T, V)
+       
+        loss, dloss = temporal_softmax_loss(scores, captions_out, mask)
+    
+        #backward
+        dh, grads['W_vocab'], grads['b_vocab'] = temporal_affine_backward(dloss, cache_scores)
+        
+        dx, dh0, grads['Wx'], grads['Wh'], grads['b'] = rnn_backward(dh, cache_h)
+        
+        grads['W_embed'] = word_embedding_backward(dx, cache_x)
+        
+        grads['W_proj'] = np.dot(features.T, dh0)
+        grads['b_proj'] = np.sum(dh0, axis = 0)
+        
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -199,7 +218,40 @@ class CaptioningRNN(object):
         # functions; you'll need to call rnn_step_forward or lstm_step_forward in #
         # a loop.                                                                 #
         ###########################################################################
-        pass
+        cur_word = self._start * np.ones([N, 1], dtype=np.int32)
+        captions[:, 0] = cur_word.T
+        cur_len = 1        
+        end_set = set()
+        prev_h = np.dot(features, W_proj) + b_proj   # N * H 2*512
+        prev_h.reshape(N,-1)  
+        while cur_len < max_length:
+            
+            
+        
+            x,_ = word_embedding_forward(cur_word, W_embed)  #input1: N, T   out: N, T, D
+            
+            x = x.reshape(N,-1)   #从N T D 转化为 N D
+            prev_h = prev_h.reshape(N, -1)
+            
+            next_h, _ = rnn_step_forward(x, prev_h, Wx, Wh, b) #N, D -> N, H
+            
+            next_h = next_h.reshape(N, 1, -1)
+            
+            scores, _ = temporal_affine_forward(next_h, W_vocab, b_vocab) #(N, T, V)
+            
+            for n in range(N):
+                temp_word = np.where(scores[n, 0, :] == np.max(scores[n, 0, :], axis = 0))[0][0]
+                cur_word[n, 0] = temp_word
+                if temp_word == self._end:
+                    end_set.add(n)
+                    captions[n, cur_len] = temp_word
+                    if len(end_set) == N:
+                        return captions
+                elif n not in end_set:
+                    captions[n, cur_len] = temp_word
+            cur_len += 1
+            prev_h = next_h
+            
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
